@@ -11,5 +11,9 @@
         <TextBox x:Name="myTextBox"/>
         <TextBlock x:Name="myTextBlock"/>
         <Button x:Name="myButton" Click="myButton_Click">Click Me</Button>
+        <Button x:Name="StartServiceButton"
+                Click="StartServiceClick">StartService</Button>
+        <Button x:Name="StopServiceButton"
+                Click="StopServiceClick">StopService</Button>
     </StackPanel>
 </Window>

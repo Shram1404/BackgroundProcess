@@ -1,14 +1,11 @@
 ﻿using Microsoft.UI.Xaml;
-using System;
-using Windows.ApplicationModel.AppService;
-using Windows.Foundation.Collections;
 
 
 namespace AppServiceConsumer
 {
     public sealed partial class MainWindow : Window
     {
-        private AppServiceConnection _connection;
+        private BackgroundServiceController backgroundServiceController = new BackgroundServiceController();
 
         public MainWindow()
         {
@@ -17,51 +14,17 @@ namespace AppServiceConsumer
 
         private async void myButton_Click(object sender, RoutedEventArgs e)
         {
-            myButton.Content = "Clicked";
-            if (_connection == null)
-            {
-                _connection = new AppServiceConnection();
+            await backgroundServiceController.SendRequestAsync("http", "https://www.google.com");
+        }
 
-                _connection.AppServiceName = "com.greatfive.great";
-                _connection.PackageFamilyName = "3bd3f21f-c50b-49b6-aecc-59ff846ae0d2_kqnxptwqxttew";
+        private void StartServiceClick(object sender, RoutedEventArgs e)
+        {
+            backgroundServiceController.CreateAndStartService(@"C:\Users\shram\Desktop\WASDKSample-master\src\AppService\AppServiceConsumer\BackgroundServices\BackgroundService.exe");
+        }
 
-                var status = await _connection.OpenAsync();
-                if (status != AppServiceConnectionStatus.Success)
-                {
-                    myTextBlock.Text = "Fail to Connect";
-                    _connection = null;
-                    return;
-                }
-            }
-
-            int idx = int.Parse(myTextBox.Text);
-            var msg = new ValueSet();
-            msg.Add("Command", "Name");
-            msg.Add("ID", idx);
-            var response = await _connection.SendMessageAsync(msg);
-            string result = "";
-            if (response.Status == AppServiceResponseStatus.Success)
-            {
-                if (response.Message["Status"] as string == "ok")
-                {
-                    result = response.Message["Result"] as string;
-                }
-            }
-            msg.Clear();
-            msg.Add("Command", "Age");
-            msg.Add("ID", idx);
-            response = await _connection.SendMessageAsync(msg);
-
-            if (response.Status == AppServiceResponseStatus.Success)
-            {
-                if (response.Message["Status"] as string == "ok")
-                {
-                    result += ":Age = " + response.Message["Result"] as string;
-                }
-
-            }
-
-            myTextBox.Text = result;
+        private void StopServiceClick(object sender, RoutedEventArgs e)
+        {
+            backgroundServiceController.StopService();
         }
     }
 }
