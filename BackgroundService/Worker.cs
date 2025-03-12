@@ -1,8 +1,5 @@
+using BackgroundService;
 using BackgroundService.Commands;
-using Microsoft.Win32.SafeHandles;
-using System.IO.Pipes;
-using System.Runtime.InteropServices;
-using System.Text.Json;
 
 namespace MyBackgroundService
 {
@@ -14,6 +11,9 @@ namespace MyBackgroundService
         public Worker(ILogger<Worker> logger)
         {
             this.logger = logger;
+
+            //var command = ParseCommand("http https://google.com -execute-at-time 12.03.2025-14:05:40"); // TEST LOGIC
+            //HandleCommandAsync(command, CancellationToken.None); // TEST LOGIC
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -39,7 +39,7 @@ namespace MyBackgroundService
                                 string response = string.Empty;
                                 if (command != null)
                                 {
-                                    response = await command.ExecuteAsync();
+                                    response = await HandleCommandAsync(command, stoppingToken);
                                 }
 
                                 logger.LogInformation($"Command Response: {response}");
@@ -62,121 +62,61 @@ namespace MyBackgroundService
 
         private IServiceCommand? ParseCommand(string request)
         {
-            IServiceCommand command = null;
+            var parts = request.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
-            var commandData = JsonSerializer.Deserialize<Dictionary<string, string>>(request);
-
-            if (commandData != null)
+            if (parts.Length > 0)
             {
-                if (commandData.ContainsKey("type") && !string.IsNullOrEmpty(commandData["type"]))
+                var commandType = parts[0];
+
+                var parameters = new Dictionary<string, string>();
+                for (int i = 1; i < parts.Length; i++)
                 {
-                    command = commandData["type"] switch
+                    if (parts[i].StartsWith("-"))
                     {
-                        "http" => new HttpRequestCommand(commandData["url"]),
-                        "toast" => throw new NotImplementedException(),
-                        "startApp" => throw new NotImplementedException(),
-                        _ => throw new InvalidOperationException("Unknown command type")
-                    };
+                        var key = parts[i].TrimStart('-');
+                        var value = i + 1 < parts.Length && !parts[i + 1].StartsWith("-") ? parts[i + 1] : string.Empty;
+
+                        parameters[key] = value;
+                        if (!string.IsNullOrEmpty(value)) i++;
+                    }
+                    else if (i == 1)
+                    {
+                        parameters["url"] = parts[i];
+                    }
                 }
+
+                IServiceCommand baseCommand = commandType switch // TODO: Fix to pass only parameters
+                {
+                    Arguments.SendHttpRequest => new HttpRequestCommand(parameters["url"]),
+                    Arguments.ShowToast => new ToastCommand(),
+                    Arguments.AppStart => new AppStartCommand(),
+                    _ => throw new InvalidOperationException("Unknown command type")
+                };
+
+                if (parameters.ContainsKey(Arguments.ExecuteAtTime) || parameters.ContainsKey(Arguments.ExecuteEvery))
+                {
+                    return new TimedCommand(baseCommand, parameters);
+                }
+
+                return baseCommand;
             }
 
-            return command;
-        }
-    }
-
-    public class NativePipeServer
-    {
-        // Оголошення P/Invoke для CreateNamedPipe
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern SafePipeHandle CreateNamedPipe(
-            string lpName,
-            uint dwOpenMode,
-            uint dwPipeMode,
-            uint nMaxInstances,
-            uint nOutBufferSize,
-            uint nInBufferSize,
-            uint nDefaultTimeOut,
-            ref SECURITY_ATTRIBUTES lpSecurityAttributes);
-
-        // Функція для конвертації SDDL у SECURITY_DESCRIPTOR
-        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(
-            string StringSecurityDescriptor,
-            uint StringSDRevision,
-            out IntPtr SecurityDescriptor,
-            IntPtr SecurityDescriptorSize);
-
-        // Для звільнення пам'яті, виділеної ConvertStringSecurityDescriptorToSecurityDescriptor
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr LocalFree(IntPtr hMem);
-
-        // Структура SECURITY_ATTRIBUTES
-        [StructLayout(LayoutKind.Sequential)]
-        private struct SECURITY_ATTRIBUTES
-        {
-            public int nLength;
-            public IntPtr lpSecurityDescriptor;
-            public bool bInheritHandle;
+            return null;
         }
 
-        // Константи для CreateNamedPipe
-        private const uint PIPE_ACCESS_DUPLEX = 0x00000003;
-        private const uint FILE_FLAG_OVERLAPPED = 0x40000000;
-        private const uint PIPE_TYPE_MESSAGE = 0x00000004;
-        private const uint PIPE_READMODE_MESSAGE = 0x00000002;
-        private const uint PIPE_WAIT = 0x00000000;
 
-        /// <summary>
-        /// Створює NamedPipeServerStream із заданим ім'ям каналу та налаштованим доступом для всіх.
-        /// </summary>
-        /// <param name="pipeName">Ім'я каналу (без префікса "\\.\pipe\")</param>
-        /// <returns>NamedPipeServerStream з потрібними параметрами безпеки</returns>
-        public static NamedPipeServerStream CreatePipeServer(string pipeName)
+
+        private async Task<string> HandleCommandAsync(IServiceCommand command, CancellationToken stoppingToken)
         {
-            // Використовуємо SDDL для дозволу повного доступу (Generic All) для всіх користувачів
-            string sddl = "D:(A;;FA;;;WD)";
-
-            // Конвертуємо SDDL у SECURITY_DESCRIPTOR
-            if (!ConvertStringSecurityDescriptorToSecurityDescriptor(sddl, 1, out IntPtr pSecurityDescriptor, IntPtr.Zero))
+            if (command is TimedCommand timedCommand)
             {
-                int error = Marshal.GetLastWin32Error();
-                throw new System.ComponentModel.Win32Exception(error, "ConvertStringSecurityDescriptorToSecurityDescriptor не вдалося");
+                await timedCommand.StartAsync(); // Таймерна команда обробляє логіку часу
+                return "Timed command scheduled.";
             }
-
-            // Заповнюємо SECURITY_ATTRIBUTES
-            var sa = new SECURITY_ATTRIBUTES
+            else
             {
-                nLength = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES)),
-                lpSecurityDescriptor = pSecurityDescriptor,
-                bInheritHandle = false
-            };
-
-            // Формуємо повне ім'я каналу
-            string fullPipeName = @"\\.\pipe\" + pipeName;
-
-            // Створюємо іменований канал з асинхронним режимом роботи
-            SafePipeHandle pipeHandle = CreateNamedPipe(
-                fullPipeName,
-                PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-                1,        // максимальна кількість інстанцій
-                4096,     // розмір вихідного буфера (байт)
-                4096,     // розмір вхідного буфера (байт)
-                0,        // таймаут (мс)
-                ref sa);
-
-            // Звільняємо пам'ять, зайняту конвертованим SECURITY_DESCRIPTOR
-            LocalFree(pSecurityDescriptor);
-
-            if (pipeHandle.IsInvalid)
-            {
-                int error = Marshal.GetLastWin32Error();
-                throw new System.ComponentModel.Win32Exception(error, "CreateNamedPipe не вдалося");
+                return await command.ExecuteAsync(); // Звичайна команда виконується одразу
             }
-
-            // Обгортаємо SafePipeHandle в NamedPipeServerStream.
-            // Використовуємо конструктор: NamedPipeServerStream(PipeDirection, bool isAsync, bool isConnected, SafePipeHandle)
-            return new NamedPipeServerStream(PipeDirection.InOut, true, false, pipeHandle);
         }
     }
 }

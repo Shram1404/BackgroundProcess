@@ -1,6 +1,6 @@
 ﻿namespace BackgroundService.Commands
 {
-    internal interface IServiceCommand
+    public interface IServiceCommand
     {
         Task<string> ExecuteAsync();
     }
