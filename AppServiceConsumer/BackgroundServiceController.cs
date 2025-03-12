@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
-using System.Security.Principal;
 using System.ServiceProcess;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -12,36 +11,37 @@ namespace AppServiceConsumer
 {
     internal class BackgroundServiceController
     {
-        const string ServiceName = "BackgroundWorkerService"; // TODO: IMPORTANT - Must be unique for each service or application // TODO: Move to shared constants
+        const string ServiceName = "BackgroundWorkerService";
 
         public void CreateAndStartService(string servicePath, string serviceName = null)
         {
             if (serviceName == null)
             {
-                serviceName = "BackgroundWorkerService";
+                serviceName = ServiceName;
             }
 
             if (!IsServiceInstalled(serviceName))
             {
-                RunServiceAsAdministrator(servicePath, serviceName);
+                Debug.WriteLine($"Service '{serviceName}' is not installed. Installing and starting it now.");
+                InstallAndStartService(servicePath, serviceName);
             }
             else
             {
-                StartService(serviceName);
+                Debug.WriteLine($"Service '{serviceName}' is already installed and will be started if not running.");
+                EnsureServiceIsRunning(serviceName);
             }
         }
 
-        private void RunServiceAsAdministrator(string servicePath, string serviceName)
+        private void InstallAndStartService(string servicePath, string serviceName)
         {
-            string createServiceCommand = $"New-Service -Name '{serviceName}' -BinaryPathName '{servicePath}'";
-            string combinedCommand = $"{createServiceCommand}; Start-Service -Name '{serviceName}'";
+            string createServiceCommand = $"New-Service -Name '{serviceName}' -BinaryPathName '{servicePath}' -StartupType Automatic; Start-Service -Name '{serviceName}'";
 
             ProcessStartInfo psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-Command \"{combinedCommand}\"",
+                Arguments = $"-Command \"{createServiceCommand}\"",
                 UseShellExecute = true,
-                Verb = "runas"
+                Verb = "runas",
             };
 
             try
@@ -59,100 +59,43 @@ namespace AppServiceConsumer
                     }
                     else
                     {
-                        Debug.WriteLine($"Service created and started successfully: {output}");
+                        Debug.WriteLine($"Service '{serviceName}' created and started successfully: {output}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to create and start service: {ex.Message}");
+                Debug.WriteLine($"Failed to install and start service '{serviceName}': {ex.Message}");
             }
         }
 
-        public void StopService(string serviceName = null)
+        private void EnsureServiceIsRunning(string serviceName)
         {
-            if (string.IsNullOrEmpty(serviceName))
-            {
-                serviceName = ServiceName;
-            }
-
-            if (!IsAdministrator())
-            {
-                RunAsAdministrator("Stop-Service", serviceName);
-                return;
-            }
-
-            using (ServiceController sc = new ServiceController(serviceName))
-            {
-                if (sc.Status == ServiceControllerStatus.Running)
-                {
-                    sc.Stop();
-                    sc.WaitForStatus(ServiceControllerStatus.Stopped);
-                }
-            }
-        }
-
-        private void StartService(string serviceName)
-        {
-            if (!IsAdministrator())
-            {
-                RunAsAdministrator("Start-Service", serviceName);
-                return;
-            }
-
             try
             {
                 using (ServiceController sc = new ServiceController(serviceName))
                 {
-                    if (sc.Status == ServiceControllerStatus.Stopped)
+                    if (sc.Status != ServiceControllerStatus.Running)
                     {
                         sc.Start();
                         sc.WaitForStatus(ServiceControllerStatus.Running);
+                        Debug.WriteLine($"Service '{serviceName}' started successfully.");
+                    }
+                    else
+                    {
+                        Debug.WriteLine($"Service '{serviceName}' is already running.");
                     }
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to start service: {ex.Message}");
+                Debug.WriteLine($"Failed to start service '{serviceName}': {ex.Message}");
             }
         }
 
-        private void RunAsAdministrator(string command, string serviceName)
+        public async Task SendRequestAsync(string command)
         {
-            string psCommand = $"{command} -Name '{serviceName}'";
-
-            ProcessStartInfo psi = new ProcessStartInfo
-            {
-                FileName = "powershell.exe",
-                Arguments = $"-Command \"{psCommand}\"",
-                UseShellExecute = true,
-                Verb = "runas"
-            };
-
-            try
-            {
-                Process.Start(psi);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Failed to run as administrator: {ex.Message}");
-            }
-        }
-
-        private bool IsAdministrator()
-        {
-            using (WindowsIdentity identity = WindowsIdentity.GetCurrent())
-            {
-                WindowsPrincipal principal = new WindowsPrincipal(identity);
-                return principal.IsInRole(WindowsBuiltInRole.Administrator);
-            }
-        }
-
-        public async Task SendRequestAsync(string type, string message)
-        {
-            string serviceMessage = JsonSerializer.Serialize(new Dictionary<string, string> { { "Type", type }, { "Message", message } });
-
-            Debug.WriteLine($"Sending message to service: {serviceMessage}");
+            Debug.WriteLine($"Sending message to service: {command}");
 
             using (var client = new NamedPipeClientStream(".", ServiceName, PipeDirection.InOut, PipeOptions.Asynchronous))
             {
@@ -162,7 +105,7 @@ namespace AppServiceConsumer
                     using (var reader = new StreamReader(client))
                     using (var writer = new StreamWriter(client) { AutoFlush = true })
                     {
-                        await writer.WriteLineAsync(serviceMessage);
+                        await writer.WriteLineAsync(command);
                         string response = await reader.ReadLineAsync();
                         Debug.WriteLine($"Response from service: {response}");
                     }
@@ -180,7 +123,7 @@ namespace AppServiceConsumer
             {
                 using (ServiceController sc = new ServiceController(serviceName))
                 {
-                    var status = sc.Status;
+                    var status = sc.Status; // Перевірка стану дозволяє виявити, чи сервіс існує
                     return true;
                 }
             }

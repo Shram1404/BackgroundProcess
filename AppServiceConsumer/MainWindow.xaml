@@ -8,7 +8,8 @@
     mc:Ignorable="d">
 
     <StackPanel Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Center" Width="200">
-        <TextBox x:Name="myTextBox"/>
+        <TextBox x:Name="myTextBox"
+                 Text="http https://google.com"/>
         <TextBlock x:Name="myTextBlock"/>
         <Button x:Name="myButton" Click="myButton_Click">Click Me</Button>
         <Button x:Name="StartServiceButton"
